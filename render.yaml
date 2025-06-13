@@ -10,15 +10,15 @@ services:
       - key: NODE_VERSION
         value: 18.19.1
       - key: MONGO_URI
-        valueFrom: MONGO_URI_SECRET
+        value: MONGO_URI_SECRET
       - key: PORT
         value: 5000
       - key: JWT_SECRET
-        valueFrom: JWT_SECRET_SECRET
+        value: JWT_SECRET_SECRET
       - key: ULTRAMSG_INSTANCE_ID
-        valueFrom: ULTRAMSG_INSTANCE_ID_SECRET
+        value: ULTRAMSG_INSTANCE_ID_SECRET
       - key: ULTRAMSG_TOKEN
-        valueFrom: ULTRAMSG_TOKEN_SECRET
+        value: ULTRAMSG_TOKEN_SECRET
       - key: NODE_ENV
         value: production
 
