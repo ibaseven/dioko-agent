@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: dioko-backend
+    env: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18.19.1
+      - key: MONGO_URI
+        valueFrom: MONGO_URI_SECRET
+      - key: PORT
+        value: 5000
+      - key: JWT_SECRET
+        valueFrom: JWT_SECRET_SECRET
+      - key: ULTRAMSG_INSTANCE_ID
+        valueFrom: ULTRAMSG_INSTANCE_ID_SECRET
+      - key: ULTRAMSG_TOKEN
+        valueFrom: ULTRAMSG_TOKEN_SECRET
+      - key: NODE_ENV
+        value: production
+
+  - type: web
+    name: dioko-frontend
+    env: static
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: build
+    envVars:
+      - key: NODE_VERSION
+        value: 18.19.1
+      - key: REACT_APP_API_URL
+        value: https://dioko-backend.onrender.com
