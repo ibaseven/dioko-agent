@@ -1,37 +1,106 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './AdminDashboard.css';
 import logo from '../assets/logo.png';
-import API_BASE_URL from '../config'; 
 
 const API_BASE = `${process.env.REACT_APP_API_URL}`;
+const COMMISSION_PER_CLIENT = 160; // 160 FCFA par client
 
 const AdminDashboard = () => {
+  // États de navigation
   const [currentScreen, setCurrentScreen] = useState('validation');
   const [formStep, setFormStep] = useState(1);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   
-  // Agent creation states
+  // États création agent
   const [agentName, setAgentName] = useState('');
   const [agentPhone, setAgentPhone] = useState('');
   const [agentPassword, setAgentPassword] = useState('');
   const [agentMessage, setAgentMessage] = useState('');
 
-  // Client validation states
+  // États validation client
   const [clientFirstName, setClientFirstName] = useState('');
   const [clientLastName, setClientLastName] = useState('');
   const [clientPhone, setClientPhone] = useState('');
   const [otp, setOtp] = useState('');
   const [validationMessage, setValidationMessage] = useState('');
 
-  // Lists states
+  // États listes
   const [agentsList, setAgentsList] = useState([]);
   const [clientsList, setClientsList] = useState([]);
   const [clientsOfAgent, setClientsOfAgent] = useState([]);
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const [selectedAgentId, setSelectedAgentId] = useState(null);
+  const [loadingAgentId, setLoadingAgentId] = useState(null);
 
-  // Filter states
+  // États filtres
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
 
+  // Fonctions utilitaires
+  const toggleMenu = () => setIsMenuOpen(!isMenuOpen);
+  const handleNavClick = (screen) => {
+    setCurrentScreen(screen);
+    setIsMenuOpen(false);
+  };
+
+  // Calcul des données salariales avec gestion du mois sélectionné
+  const calculateAgentSalaryData = (clients, month = selectedMonth, year = selectedYear) => {
+    const validatedClients = clients.filter(client => {
+      if (!client.validatedAt) return false;
+      const date = new Date(client.validatedAt);
+      return date.getMonth() === month && 
+             date.getFullYear() === year;
+    });
+
+    // Les clients en attente sont ceux non validés (peu importe le mois)
+    const pendingClients = clients.filter(client => !client.validatedAt);
+
+    const currentSalary = validatedClients.length * COMMISSION_PER_CLIENT;
+    const potentialSalary = (validatedClients.length + pendingClients.length) * COMMISSION_PER_CLIENT;
+
+    return {
+      currentSalary,
+      potentialSalary,
+      validatedClients: validatedClients.length,
+      pendingClients: pendingClients.length,
+      validatedClientsData: validatedClients,
+      pendingClientsData: pendingClients,
+      month,
+      year
+    };
+  };
+
+  // Obtenir le nom du mois
+  const getMonthName = (month) => {
+    const months = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 
+                   'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+    return months[month];
+  };
+
+  // Liste des mois disponibles (jusqu'au mois en cours)
+  const getAvailableMonths = () => {
+    const currentDate = new Date();
+    const months = [];
+    
+    for (let year = 2023; year <= currentDate.getFullYear(); year++) {
+      const maxMonth = year === currentDate.getFullYear() ? currentDate.getMonth() : 11;
+      
+      for (let month = 0; month <= maxMonth; month++) {
+        months.push({
+          month,
+          year,
+          label: `${getMonthName(month)} ${year}`
+        });
+      }
+    }
+    
+    return months.reverse(); // Du plus récent au plus ancien
+  };
+
+  // Création d'un agent
   const handleCreateAgent = async (e) => {
     e.preventDefault();
     setAgentMessage('Création en cours...');
@@ -64,6 +133,7 @@ const AdminDashboard = () => {
     }
   };
 
+  // Validation client
   const handleCreateClient = async (e) => {
     e.preventDefault();
     if (formStep === 1) {
@@ -85,6 +155,12 @@ const AdminDashboard = () => {
         const data = await response.json();
         if (response.ok) {
           setValidationMessage('Code OTP envoyé. Veuillez entrer le code.');
+          localStorage.setItem('pendingClient', JSON.stringify({
+            firstName: clientFirstName,
+            lastName: clientLastName,
+            phone: clientPhone,
+            _id: data.client._id
+          }));
           setFormStep(2);
         } else {
           setValidationMessage(data.message || 'Erreur');
@@ -93,38 +169,49 @@ const AdminDashboard = () => {
         setValidationMessage('Erreur serveur');
       }
     } else {
-      // Validate OTP
-      setValidationMessage('Validation en cours...');
-      try {
-        const response = await fetch(`${API_BASE}/api/client/confirm-otp`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          },
-          body: JSON.stringify({
-            phone: clientPhone,
-            otp: otp,
-          }),
-        });
-
-        const data = await response.json();
-        if (response.ok) {
-          setValidationMessage('✅ Client validé avec succès !');
-          setFormStep(1);
-          setClientFirstName('');
-          setClientLastName('');
-          setClientPhone('');
-          setOtp('');
-        } else {
-          setValidationMessage(data.message || 'Code OTP incorrect');
-        }
-      } catch (err) {
-        setValidationMessage('Erreur serveur');
-      }
+      handleValidateOtp(e);
     }
   };
 
+  // Validation OTP
+  const handleValidateOtp = async (e) => {
+    e.preventDefault();
+    setValidationMessage('Validation en cours...');
+    try {
+      const pendingClient = JSON.parse(localStorage.getItem('pendingClient'));
+      
+      const response = await fetch(`${API_BASE}/api/client/verify-otp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify({
+          clientId: pendingClient._id,
+          phone: pendingClient.phone,
+          otp: otp,
+        }),
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        setValidationMessage('✅ Client validé avec succès !');
+        localStorage.removeItem('pendingClient');
+        setFormStep(1);
+        setClientFirstName('');
+        setClientLastName('');
+        setClientPhone('');
+        setOtp('');
+        fetchClients();
+      } else {
+        setValidationMessage(data.message || 'Code OTP incorrect');
+      }
+    } catch (err) {
+      setValidationMessage('Erreur serveur');
+    }
+  };
+
+  // Récupération des agents
   const fetchAgents = async () => {
     try {
       const response = await fetch(`${API_BASE}/api/admin/agents`, {
@@ -136,13 +223,14 @@ const AdminDashboard = () => {
       if (response.ok) {
         setAgentsList(data);
       } else {
-        alert(data.message || "Erreur chargement agents");
+        console.error(data.message || "Erreur chargement agents");
       }
     } catch (err) {
-      alert("Erreur serveur agents");
+      console.error("Erreur serveur agents");
     }
   };
 
+  // Récupération des clients
   const fetchClients = async () => {
     try {
       const response = await fetch(`${API_BASE}/api/client/admin`, {
@@ -154,13 +242,14 @@ const AdminDashboard = () => {
       if (response.ok) {
         setClientsList(data);
       } else {
-        alert(data.message || "Erreur chargement clients");
+        console.error(data.message || "Erreur chargement clients");
       }
     } catch (err) {
-      alert("Erreur serveur clients");
+      console.error("Erreur serveur clients");
     }
   };
 
+  // Clients par agent
   const fetchClientsOfAgent = async (agentId, agentName) => {
     try {
       const response = await fetch(`${API_BASE}/api/client/agent/${agentId}/clients`, {
@@ -172,16 +261,41 @@ const AdminDashboard = () => {
       if (response.ok) {
         setClientsOfAgent(data);
         setSelectedAgent(agentName);
+        setSelectedAgentId(agentId);
         setCurrentScreen('agent-clients');
       } else {
-        alert(data.message || "Erreur chargement des clients de l'agent");
+        console.error(data.message || "Erreur chargement clients agent");
       }
     } catch (err) {
-      alert("Erreur serveur");
+      console.error("Erreur serveur");
     }
   };
 
+  // Salaire agent
+  const viewAgentSalary = async (agentId, agentName) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/client/agent/${agentId}/clients`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      const data = await response.json();
+      if (response.ok) {
+        setClientsOfAgent(data);
+        setSelectedAgent(agentName);
+        setSelectedAgentId(agentId);
+        setCurrentScreen('agent-salary');
+      } else {
+        console.error(data.message || "Erreur chargement salaire agent");
+      }
+    } catch (err) {
+      console.error("Erreur serveur");
+    }
+  };
+
+  // Changement statut agent - VERSION AMÉLIORÉE
   const toggleAgentStatus = async (agentId) => {
+    setLoadingAgentId(agentId);
     try {
       const response = await fetch(`${API_BASE}/api/admin/agents/${agentId}/toggle`, {
         method: 'PUT',
@@ -192,15 +306,29 @@ const AdminDashboard = () => {
 
       const data = await response.json();
       if (response.ok) {
-        fetchAgents(); // Refresh list
+        // Mise à jour optimiste avec les données du serveur
+        setAgentsList(agentsList.map(agent => 
+          agent._id === agentId ? { ...agent, isActive: data.agent.isActive } : agent
+        ));
+        setAgentMessage(`Agent ${data.agent.isActive ? 'activé' : 'bloqué'} avec succès`);
+        setTimeout(() => setAgentMessage(''), 3000);
       } else {
-        alert(data.message || "Erreur changement statut");
+        console.error(data.message || "Erreur changement statut");
+        setAgentMessage(data.message || "Erreur lors du changement de statut");
+        setTimeout(() => setAgentMessage(''), 3000);
+        // Recharger les agents pour synchroniser
+        fetchAgents();
       }
     } catch (err) {
-      alert("Erreur serveur");
+      console.error("Erreur serveur:", err);
+      setAgentMessage("Erreur de connexion au serveur");
+      setTimeout(() => setAgentMessage(''), 3000);
+    } finally {
+      setLoadingAgentId(null);
     }
   };
 
+  // Filtrage clients
   const filterClients = () => {
     const now = new Date();
     return clientsList.filter(client => {
@@ -223,19 +351,31 @@ const AdminDashboard = () => {
     });
   };
 
+  // Filtrage agents
   const filteredAgents = agentsList.filter(agent => 
     agent.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     agent.phone.includes(searchTerm)
   );
 
+  // Déconnexion
   const handleLogout = () => {
     localStorage.removeItem('token');
     window.location.href = '/';
   };
 
+  // Effet initial
+  useEffect(() => {
+    if (currentScreen === 'agents' || currentScreen === 'salaries') {
+      fetchAgents();
+    }
+    if (currentScreen === 'clients' || currentScreen === 'validation') {
+      fetchClients();
+    }
+  }, [currentScreen]);
+
   return (
     <div className="app-container">
-      {/* Header */}
+      {/* En-tête */}
       <header className="app-header">
         <div className="header-content">
           <div className="logo-section">
@@ -243,41 +383,45 @@ const AdminDashboard = () => {
             <div className="app-title">DIOKO</div>
             <div className="user-badge">ADMIN</div>
           </div>
+          <button className="menu-toggle" onClick={toggleMenu}>
+            {isMenuOpen ? '✕' : '☰'}
+          </button>
         </div>
       </header>
       
       {/* Navigation */}
-      <nav className="app-nav">
+      <nav className={`app-nav ${isMenuOpen ? 'open' : ''}`}>
         <button 
           className={`nav-item ${currentScreen === 'validation' ? 'active' : ''}`}
-          onClick={() => setCurrentScreen('validation')}
+          onClick={() => handleNavClick('validation')}
         >
           <span className="nav-icon">✓</span>
           <span className="nav-text">Validation</span>
         </button>
         <button 
           className={`nav-item ${currentScreen === 'agents' ? 'active' : ''}`}
-          onClick={() => {
-            setCurrentScreen('agents');
-            fetchAgents();
-          }}
+          onClick={() => handleNavClick('agents')}
         >
           <span className="nav-icon">👥</span>
           <span className="nav-text">Agents</span>
         </button>
         <button 
           className={`nav-item ${currentScreen === 'clients' ? 'active' : ''}`}
-          onClick={() => {
-            setCurrentScreen('clients');
-            fetchClients();
-          }}
+          onClick={() => handleNavClick('clients')}
         >
           <span className="nav-icon">👤</span>
           <span className="nav-text">Clients</span>
         </button>
         <button 
+          className={`nav-item ${currentScreen === 'salaries' ? 'active' : ''}`}
+          onClick={() => handleNavClick('salaries')}
+        >
+          <span className="nav-icon">💰</span>
+          <span className="nav-text">Salaires</span>
+        </button>
+        <button 
           className={`nav-item ${currentScreen === 'create-agent' ? 'active' : ''}`}
-          onClick={() => setCurrentScreen('create-agent')}
+          onClick={() => handleNavClick('create-agent')}
         >
           <span className="nav-icon">➕</span>
           <span className="nav-text">Nouvel Agent</span>
@@ -288,171 +432,164 @@ const AdminDashboard = () => {
         </button>
       </nav>
       
-      {/* Main Content */}
+      {/* Contenu principal */}
       <main className="app-main">
-        {/* Validation Screen */}
+        {/* Message de statut global */}
+        {agentMessage && (
+          <div className={`global-message ${agentMessage.includes('✅') || agentMessage.includes('succès') ? 'success' : 'error'}`}>
+            {agentMessage}
+          </div>
+        )}
+
+        {/* Écran de validation */}
         {currentScreen === 'validation' && (
           <div className="screen-container">
             <div className="form-card">
               <h2 className="screen-title">Validation Client</h2>
               
               {formStep === 1 ? (
-                <div className="form-container">
+                <form onSubmit={handleCreateClient} className="form-container">
                   <div className="input-group">
-                    <label className="input-label">Prénom du client</label>
+                    <label>Prénom</label>
                     <input 
                       type="text" 
                       value={clientFirstName}
                       onChange={(e) => setClientFirstName(e.target.value)}
-                      className="form-input"
                       placeholder="Ex: Jean"
+                      required
                     />
                   </div>
                   
                   <div className="input-group">
-                    <label className="input-label">Nom du client</label>
+                    <label>Nom</label>
                     <input 
                       type="text" 
                       value={clientLastName}
                       onChange={(e) => setClientLastName(e.target.value)}
-                      className="form-input"
                       placeholder="Ex: Dupont"
+                      required
                     />
                   </div>
                   
                   <div className="input-group">
-                    <label className="input-label">Numéro de téléphone</label>
+                    <label>Téléphone</label>
                     <input 
                       type="tel" 
                       value={clientPhone}
                       onChange={(e) => setClientPhone(e.target.value)}
-                      className="form-input"
                       placeholder="Ex: 077123456"
+                      required
                     />
                   </div>
                   
-                  <button 
-                    onClick={handleCreateClient}
-                    className="btn-primary"
-                  >
+                  <button type="submit" className="btn-primary">
                     Envoyer OTP
                   </button>
-                </div>
+                </form>
               ) : (
-                <div className="form-container">
+                <form onSubmit={handleCreateClient} className="form-container">
                   <div className="otp-info">
-                    <p>Un code OTP a été envoyé au numéro</p>
+                    <p>Code envoyé au:</p>
                     <p className="phone-number">{clientPhone}</p>
                   </div>
                   
                   <div className="input-group">
-                    <label className="input-label">Code OTP</label>
+                    <label>Code OTP</label>
                     <input 
                       type="text" 
                       value={otp}
                       onChange={(e) => setOtp(e.target.value)}
-                      className="form-input"
                       placeholder="Ex: 123456"
+                      required
                     />
                   </div>
                   
-                  <button 
-                    onClick={handleCreateClient}
-                    className="btn-primary"
-                  >
-                    Valider le client
+                  <button type="submit" className="btn-primary">
+                    Valider
                   </button>
                   
                   <button 
+                    type="button"
                     onClick={() => setFormStep(1)}
                     className="btn-secondary"
                   >
                     Retour
                   </button>
-                </div>
+                </form>
               )}
+              
               {validationMessage && (
-                <div className="message-container">
-                  <p className={`message ${validationMessage.includes('✅') ? 'success' : 'info'}`}>
-                    {validationMessage}
-                  </p>
+                <div className={`message ${validationMessage.includes('✅') ? 'success' : 'error'}`}>
+                  {validationMessage}
                 </div>
               )}
             </div>
           </div>
         )}
 
-        {/* Create Agent Screen */}
+        {/* Écran création agent */}
         {currentScreen === 'create-agent' && (
           <div className="screen-container">
             <div className="form-card">
-              <h2 className="screen-title">Créer un Agent</h2>
+              <h2 className="screen-title">Nouvel Agent</h2>
               
-              <div className="form-container">
+              <form onSubmit={handleCreateAgent} className="form-container">
                 <div className="input-group">
-                  <label className="input-label">Nom complet</label>
+                  <label>Nom complet</label>
                   <input 
                     type="text" 
                     value={agentName}
                     onChange={(e) => setAgentName(e.target.value)}
-                    className="form-input"
                     placeholder="Ex: Jean Dupont"
+                    required
                   />
                 </div>
                 
                 <div className="input-group">
-                  <label className="input-label">Numéro de téléphone</label>
+                  <label>Téléphone</label>
                   <input 
                     type="tel" 
                     value={agentPhone}
                     onChange={(e) => setAgentPhone(e.target.value)}
-                    className="form-input"
                     placeholder="Ex: 077123456"
+                    required
                   />
                 </div>
                 
                 <div className="input-group">
-                  <label className="input-label">Mot de passe</label>
+                  <label>Mot de passe</label>
                   <input 
                     type="password" 
                     value={agentPassword}
                     onChange={(e) => setAgentPassword(e.target.value)}
-                    className="form-input"
                     placeholder="••••••••"
+                    required
                   />
                 </div>
                 
-                <button 
-                  onClick={handleCreateAgent}
-                  className="btn-primary"
-                >
+                <button type="submit" className="btn-primary">
                   Créer l'agent
                 </button>
-              </div>
+              </form>
               
               {agentMessage && (
-                <div className="message-container">
-                  <p className={`message ${agentMessage.includes('✅') ? 'success' : 'info'}`}>
-                    {agentMessage}
-                  </p>
+                <div className={`message ${agentMessage.includes('✅') ? 'success' : 'error'}`}>
+                  {agentMessage}
                 </div>
               )}
             </div>
           </div>
         )}
         
-        {/* Agents Screen */}
+        {/* Écran agents */}
         {currentScreen === 'agents' && (
           <div className="screen-container">
             <div className="list-card">
               <div className="list-header">
-                <h2 className="screen-title">Gestion des Agents</h2>
-              </div>
-              
-              <div className="search-container">
-                <input 
+                <h2>Gestion des Agents</h2>
+                <input
                   type="text"
-                  placeholder="Rechercher un agent..."
+                  placeholder="Rechercher..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="search-input"
@@ -460,7 +597,7 @@ const AdminDashboard = () => {
               </div>
               
               <div className="table-container">
-                <table className="data-table">
+                <table>
                   <thead>
                     <tr>
                       <th>Nom</th>
@@ -470,27 +607,32 @@ const AdminDashboard = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredAgents.map((agent, index) => (
-                      <tr key={index}>
+                    {filteredAgents.map((agent) => (
+                      <tr key={agent._id}>
                         <td>{agent.name}</td>
                         <td>{agent.phone}</td>
                         <td>
-                          <span className={`status-badge ${agent.isBlocked ? 'blocked' : 'active'}`}>
-                            {agent.isBlocked ? 'Bloqué' : 'Actif'}
+                          <span className={`status-badge ${agent.isActive ? 'active' : 'blocked'}`}>
+                            {agent.isActive ? 'Actif' : 'Bloqué'}
                           </span>
                         </td>
-                        <td>
+                        <td className="actions">
                           <button 
-                            onClick={() => fetchClientsOfAgent(agent._id, agent.name)}
-                            className="btn-action view"
+                            onClick={() => viewAgentSalary(agent._id, agent.name)}
+                            className="btn-action"
                           >
-                            Voir
+                            Voir Salaire
                           </button>
                           <button 
                             onClick={() => toggleAgentStatus(agent._id)}
-                            className="btn-action toggle"
+                            className={`btn-action ${agent.isActive ? 'block' : 'activate'}`}
+                            disabled={loadingAgentId === agent._id}
                           >
-                            {agent.isBlocked ? 'Activer' : 'Bloquer'}
+                            {loadingAgentId === agent._id ? (
+                              'Chargement...'
+                            ) : (
+                              agent.isActive ? 'Bloquer' : 'Activer'
+                            )}
                           </button>
                         </td>
                       </tr>
@@ -508,51 +650,63 @@ const AdminDashboard = () => {
           </div>
         )}
 
-        {/* Clients Screen */}
+        {/* Écran clients */}
         {currentScreen === 'clients' && (
           <div className="screen-container">
             <div className="list-card">
-              <h2 className="screen-title">Liste des Clients</h2>
-              <div className="filter-bar">
-                <select 
-                  value={filter} 
-                  onChange={(e) => setFilter(e.target.value)}
-                  className="filter-select"
-                >
-                  <option value="all">Tous</option>
-                  <option value="day">Aujourd'hui</option>
-                  <option value="week">Cette semaine</option>
-                  <option value="month">Ce mois</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="Rechercher..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="search-input"
-                />
+              <div className="list-header">
+                <h2>Tous les Clients</h2>
+                <div className="filter-controls">
+                  <select 
+                    value={filter} 
+                    onChange={(e) => setFilter(e.target.value)}
+                  >
+                    <option value="all">Tous</option>
+                    <option value="day">Aujourd'hui</option>
+                    <option value="week">Cette semaine</option>
+                    <option value="month">Ce mois</option>
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="Rechercher..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="search-input"
+                  />
+                </div>
               </div>
-              
+
               <div className="table-container">
-                <table className="data-table">
+                <table>
                   <thead>
                     <tr>
                       <th>Nom</th>
                       <th>Téléphone</th>
-                      <th>Date de validation</th>
+                      <th>Agent</th>
+                      <th>Date</th>
+                      <th>Statut</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filterClients().map((client, index) => (
-                      <tr key={index}>
-                        <td>{client.firstName} {client.lastName}</td>
-                        <td>{client.phone}</td>
-                        <td>{new Date(client.validatedAt).toLocaleDateString()}</td>
-                      </tr>
-                    ))}
+                    {filterClients().map((client, index) => {
+                      const agent = agentsList.find(a => a._id === client.agentId);
+                      return (
+                        <tr key={index}>
+                          <td>{client.firstName} {client.lastName}</td>
+                          <td>{client.phone}</td>
+                          <td>{agent ? agent.name : 'N/A'}</td>
+                          <td>{new Date(client.validatedAt).toLocaleDateString()}</td>
+                          <td>
+                            <span className={`status-badge ${client.validatedAt ? 'validated' : 'pending'}`}>
+                              {client.validatedAt ? 'Validé' : 'En attente'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
-                
+
                 {filterClients().length === 0 && (
                   <div className="empty-state">
                     <p>Aucun client trouvé</p>
@@ -563,50 +717,169 @@ const AdminDashboard = () => {
           </div>
         )}
 
-        {/* Agent Clients Screen */}
-        {currentScreen === 'agent-clients' && (
+        {/* Écran salaires */}
+        {currentScreen === 'salaries' && (
           <div className="screen-container">
             <div className="list-card">
-              <div className="list-header">
-                <button 
-                  onClick={() => setCurrentScreen('agents')}
-                  className="btn-back"
-                >
-                  ← Retour
-                </button>
-                <h2 className="screen-title">Clients de {selectedAgent}</h2>
+              <h2>Salaires Mensuels</h2>
+              
+              <div className="search-container">
+                <input
+                  type="text"
+                  placeholder="Rechercher un agent..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="search-input"
+                />
               </div>
               
               <div className="table-container">
-                <table className="data-table">
+                <table>
                   <thead>
                     <tr>
-                      <th>Nom</th>
-                      <th>Téléphone</th>
-                      <th>Date de validation</th>
+                      <th>Agent</th>
+                      <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {clientsOfAgent.map((client, index) => (
-                      <tr key={index}>
-                        <td>{client.firstName} {client.lastName}</td>
-                        <td>{client.phone}</td>
-                        <td>{client.validatedAt ? new Date(client.validatedAt).toLocaleDateString() : 'N/A'}</td>
+                    {filteredAgents.map((agent) => (
+                      <tr key={agent._id}>
+                        <td>
+                          <strong>{agent.name}</strong>
+                          <br />
+                          <small>{agent.phone}</small>
+                        </td>
+                        <td>
+                          <button 
+                            onClick={() => viewAgentSalary(agent._id, agent.name)}
+                            className="btn-action"
+                          >
+                            Voir Détails
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                
-                {clientsOfAgent.length === 0 && (
-                  <div className="empty-state">
-                    <p>Aucun client pour cet agent</p>
-                  </div>
-                )}
               </div>
             </div>
           </div>
         )}
+
+        {/* Écran salaire d'un agent */}
+        {currentScreen === 'agent-salary' && (
+          <div className="screen-container">
+            <div className="list-card">
+              <div className="list-header">
+                <button onClick={() => setCurrentScreen('salaries')} className="btn-back">
+                  ← Retour aux Salaires
+                </button>
+                <div className="month-selector">
+                  <button 
+                    onClick={() => setShowMonthPicker(!showMonthPicker)}
+                    className="month-button"
+                  >
+                    {getMonthName(selectedMonth)} {selectedYear}
+                    <span className="arrow">▼</span>
+                  </button>
+                  
+                  {showMonthPicker && (
+                    <div className="month-picker">
+                      {getAvailableMonths().map((m, index) => (
+                        <button
+                          key={index}
+                          className={`month-option ${selectedMonth === m.month && selectedYear === m.year ? 'selected' : ''}`}
+                          onClick={() => {
+                            setSelectedMonth(m.month);
+                            setSelectedYear(m.year);
+                            setShowMonthPicker(false);
+                          }}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {(() => {
+                const salaryData = calculateAgentSalaryData(clientsOfAgent, selectedMonth, selectedYear);
+                const isCurrentMonth = selectedMonth === new Date().getMonth() && selectedYear === new Date().getFullYear();
+                
+                return (
+                  <>
+                    <div className="salary-summary-cards">
+                      <div className="salary-card current">
+                        <h3>Salaire {isCurrentMonth ? 'en Cours' : 'du Mois'}</h3>
+                        <p className="amount">{salaryData.currentSalary} FCFA</p>
+                        <p className="detail">{salaryData.validatedClients} clients validés × {COMMISSION_PER_CLIENT} FCFA</p>
+                      </div>
+                      
+                      {isCurrentMonth && (
+                        <div className="salary-card potential">
+                          <h3>Salaire Potentiel</h3>
+                          <p className="amount">{salaryData.potentialSalary} FCFA</p>
+                          <p className="detail">{(salaryData.validatedClients + salaryData.pendingClients)} clients × {COMMISSION_PER_CLIENT} FCFA</p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="clients-section">
+                      <h3>Détail des Clients</h3>
+                      
+                      <div className="tabs">
+                        <button className="tab active">Validés ({salaryData.validatedClients})</button>
+                        {isCurrentMonth && (
+                          <button className="tab">En Attente ({salaryData.pendingClients})</button>
+                        )}
+                      </div>
+
+                      <div className="clients-list">
+                        {salaryData.validatedClientsData.map((client, index) => (
+                          <div key={index} className="client-item validated">
+                            <div className="client-info">
+                              <span className="name">{client.firstName} {client.lastName}</span>
+                              <span className="phone">{client.phone}</span>
+                            </div>
+                            <div className="client-meta">
+                              <span className="date">
+                                {new Date(client.validatedAt).toLocaleDateString()}
+                              </span>
+                              <span className="commission">+{COMMISSION_PER_CLIENT} FCFA</span>
+                            </div>
+                          </div>
+                        ))}
+
+                        {isCurrentMonth && salaryData.pendingClientsData.map((client, index) => (
+                          <div key={`pending-${index}`} className="client-item pending">
+                            <div className="client-info">
+                              <span className="name">{client.firstName} {client.lastName}</span>
+                              <span className="phone">{client.phone}</span>
+                            </div>
+                            <div className="client-meta">
+                              <span className="status">En attente</span>
+                              <span className="commission potential">+{COMMISSION_PER_CLIENT} FCFA</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* Pied de page */}
+      <footer className="app-footer">
+        <div className="footer-content">
+          <p>© {new Date().getFullYear()} DIOKO - Tous droits réservés</p>
+          <p>Version 1.0.0</p>
+        </div>
+      </footer>
     </div>
   );
 };

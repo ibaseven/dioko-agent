@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FiLogOut, FiUserPlus, FiUsers, FiMenu, FiX, FiCalendar, FiDollarSign } from 'react-icons/fi';
+import { FiLogOut, FiUserPlus, FiUsers, FiMenu, FiX, FiCalendar, FiDollarSign, FiClock } from 'react-icons/fi';
 import './AgentDashboard.css';
 import logo from '../assets/logo.png';
 import Calendar from 'react-calendar';
@@ -14,6 +14,7 @@ const AgentDashboard = () => {
   const [clientFirstName, setClientFirstName] = useState('');
   const [clientLastName, setClientLastName] = useState('');
   const [clientPhone, setClientPhone] = useState('');
+  const [clientId, setClientId] = useState('');
   const [otp, setOtp] = useState('');
   const [validationMessage, setValidationMessage] = useState('');
   const [clientList, setClientList] = useState([]);
@@ -23,22 +24,37 @@ const AgentDashboard = () => {
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [clientCountByDate, setClientCountByDate] = useState({});
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Calcul du salaire
+  // Séparer les clients validés et en attente
+  const validatedClients = clientList.filter(client => client.validatedAt);
+  const pendingClients = clientList.filter(client => !client.validatedAt);
+
+  // Calcul du salaire basé uniquement sur les clients validés
   const calculateSalary = (clients) => {
-    return clients.length * COMMISSION_PER_CLIENT;
+    return clients.filter(client => client.validatedAt).length * COMMISSION_PER_CLIENT;
   };
 
   const handleCreateClient = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
+    setValidationMessage('');
+    
     if (formStep === 1) {
       setValidationMessage('Enregistrement du client...');
       try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          setValidationMessage('Token d\'authentification manquant');
+          setIsLoading(false);
+          return;
+        }
+
         const response = await fetch(`${API_BASE}/api/client/validate`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({
             firstName: clientFirstName,
@@ -47,70 +63,122 @@ const AgentDashboard = () => {
           }),
         });
 
-        const data = await response.json();
-        if (response.ok) {
-          setValidationMessage('✅ Code OTP envoyé. Veuillez entrer le code.');
-          setFormStep(2);
-        } else {
-          setValidationMessage(data.message || 'Erreur lors de la création');
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.message || `Erreur HTTP: ${response.status}`);
         }
+
+        const data = await response.json();
+        
+        if (data.clientId) {
+          setClientId(data.clientId);
+        }
+        
+        setValidationMessage('✅ Code OTP envoyé. Veuillez entrer le code.');
+        setFormStep(2);
+        
       } catch (error) {
-        setValidationMessage('Erreur serveur.');
+        console.error('Erreur lors de la création:', error);
+        setValidationMessage(`Erreur: ${error.message}`);
+      } finally {
+        setIsLoading(false);
       }
     } else {
-      handleValidateOtp(e);
+      await handleValidateOtp(e);
     }
   };
 
   const handleValidateOtp = async (e) => {
     e.preventDefault();
+    setIsLoading(true);
     setValidationMessage('Vérification du code OTP...');
+    
     try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setValidationMessage('Token d\'authentification manquant');
+        setIsLoading(false);
+        return;
+      }
+
+      const requestBody = {
+        phone: clientPhone,
+        otp: otp,
+      };
+
+      if (clientId) {
+        requestBody.clientId = clientId;
+      }
+
       const response = await fetch(`${API_BASE}/api/client/verify-otp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          phone: clientPhone,
-          otp,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
-      const data = await response.json();
-      if (response.ok) {
-        setValidationMessage('✅ Client validé avec succès.');
-        setClientFirstName('');
-        setClientLastName('');
-        setClientPhone('');
-        setOtp('');
-        setFormStep(1);
-        fetchMyClients();
-      } else {
-        setValidationMessage(data.message || 'OTP invalide');
+      if (!response.ok) {
+        let errorMessage = `Erreur HTTP: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorMessage;
+        } catch (parseError) {
+          console.error('Erreur lors du parsing de la réponse d\'erreur:', parseError);
+        }
+        throw new Error(errorMessage);
       }
+
+      const data = await response.json();
+      
+      setValidationMessage('✅ Client validé avec succès.');
+      
+      // Réinitialiser le formulaire
+      setClientFirstName('');
+      setClientLastName('');
+      setClientPhone('');
+      setClientId('');
+      setOtp('');
+      setFormStep(1);
+      
+      // Recharger la liste des clients
+      await fetchMyClients();
+      
     } catch (error) {
-      setValidationMessage('Erreur serveur.');
+      console.error('Erreur lors de la validation OTP:', error);
+      setValidationMessage(`Erreur: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const fetchMyClients = async () => {
     try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setValidationMessage('Token d\'authentification manquant');
+        return;
+      }
+
       const response = await fetch(`${API_BASE}/api/client/my-clients`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${token}`,
         },
       });
-      const data = await response.json();
-      if (response.ok) {
-        setClientList(data);
-        calculateClientCountByDate(data);
-      } else {
-        setValidationMessage(data.message || 'Erreur chargement clients');
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Erreur HTTP: ${response.status}`);
       }
-    } catch (err) {
-      setValidationMessage('Erreur serveur');
+
+      const data = await response.json();
+      setClientList(data);
+      calculateClientCountByDate(data);
+      
+    } catch (error) {
+      console.error('Erreur lors du chargement des clients:', error);
+      setValidationMessage(`Erreur chargement clients: ${error.message}`);
     }
   };
 
@@ -135,18 +203,31 @@ const AgentDashboard = () => {
 
   const handleLogout = async () => {
     try {
-      await fetch(`${API_BASE}/api/user/logout`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
+      const token = localStorage.getItem('token');
+      if (token) {
+        await fetch(`${API_BASE}/api/user/logout`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+        });
+      }
     } catch (err) {
-      console.error('Erreur lors de la déconnexion');
+      console.error('Erreur lors de la déconnexion:', err);
     }
 
     localStorage.removeItem('token');
     window.location.href = "/";
+  };
+
+  const resetForm = () => {
+    setClientFirstName('');
+    setClientLastName('');
+    setClientPhone('');
+    setClientId('');
+    setOtp('');
+    setFormStep(1);
+    setValidationMessage('');
   };
 
   useEffect(() => {
@@ -274,6 +355,7 @@ const AgentDashboard = () => {
                       className="form-input"
                       placeholder="Ex: Jean"
                       required
+                      disabled={isLoading}
                     />
                   </div>
                   
@@ -286,6 +368,7 @@ const AgentDashboard = () => {
                       className="form-input"
                       placeholder="Ex: Dupont"
                       required
+                      disabled={isLoading}
                     />
                   </div>
                   
@@ -296,13 +379,14 @@ const AgentDashboard = () => {
                       value={clientPhone}
                       onChange={(e) => setClientPhone(e.target.value)}
                       className="form-input"
-                      placeholder="Ex: 077123456"
+                      placeholder="Ex: +221773152659"
                       required
+                      disabled={isLoading}
                     />
                   </div>
                   
-                  <button type="submit" className="btn-primary">
-                    Envoyer OTP
+                  <button type="submit" className="btn-primary" disabled={isLoading}>
+                    {isLoading ? 'Envoi en cours...' : 'Envoyer OTP'}
                   </button>
                 </form>
               ) : (
@@ -321,17 +405,19 @@ const AgentDashboard = () => {
                       className="form-input"
                       placeholder="Ex: 123456"
                       required
+                      disabled={isLoading}
                     />
                   </div>
                   
-                  <button type="submit" className="btn-primary">
-                    Valider le client
+                  <button type="submit" className="btn-primary" disabled={isLoading}>
+                    {isLoading ? 'Validation en cours...' : 'Valider le client'}
                   </button>
                   
                   <button 
                     type="button"
-                    onClick={() => setFormStep(1)}
+                    onClick={resetForm}
                     className="btn-secondary"
+                    disabled={isLoading}
                   >
                     Retour
                   </button>
@@ -405,21 +491,12 @@ const AgentDashboard = () => {
                   <p>{clientList.length}</p>
                 </div>
                 <div className="stat-card">
-                  <h3>Aujourd'hui</h3>
-                  <p>{clientList.filter(client => {
-                    if (!client.validatedAt) return false;
-                    const date = new Date(client.validatedAt);
-                    return date.toDateString() === new Date().toDateString();
-                  }).length}</p>
+                  <h3>Validés</h3>
+                  <p>{validatedClients.length}</p>
                 </div>
                 <div className="stat-card">
-                  <h3>Ce Mois</h3>
-                  <p>{clientList.filter(client => {
-                    if (!client.validatedAt) return false;
-                    const date = new Date(client.validatedAt);
-                    const now = new Date();
-                    return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-                  }).length}</p>
+                  <h3>En attente</h3>
+                  <p>{pendingClients.length}</p>
                 </div>
               </div>
               
@@ -430,20 +507,30 @@ const AgentDashboard = () => {
                       <th>Nom</th>
                       <th>Téléphone</th>
                       <th>Date de validation</th>
+                      <th>Statut</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filterClients().map((client, index) => (
+                    {clientList.map((client, index) => (
                       <tr key={index}>
                         <td>{client.firstName} {client.lastName}</td>
                         <td>{client.phone}</td>
-                        <td>{new Date(client.validatedAt).toLocaleDateString()}</td>
+                        <td>
+                          {client.validatedAt 
+                            ? new Date(client.validatedAt).toLocaleDateString() 
+                            : 'Non validé'}
+                        </td>
+                        <td>
+                          {client.validatedAt 
+                            ? <span className="status-badge validated">Validé</span>
+                            : <span className="status-badge pending">En attente</span>}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
                 
-                {filterClients().length === 0 && (
+                {clientList.length === 0 && (
                   <div className="empty-state">
                     <p>Aucun client trouvé</p>
                   </div>
@@ -468,8 +555,13 @@ const AgentDashboard = () => {
                   
                   <div className="salary-details">
                     <div className="salary-item">
-                      <span>Nombre total de clients:</span>
-                      <span className="salary-value">{clientList.length}</span>
+                      <span>Clients validés:</span>
+                      <span className="salary-value">{validatedClients.length}</span>
+                    </div>
+                    
+                    <div className="salary-item">
+                      <span>Clients en attente:</span>
+                      <span className="salary-value">{pendingClients.length}</span>
                     </div>
                     
                     <div className="salary-item">
@@ -488,17 +580,32 @@ const AgentDashboard = () => {
                 
                 <div className="salary-periods">
                   <div className="period-card">
-                    <h4>Aujourd'hui</h4>
-                    <p className="period-count">
-                      {clientList.filter(client => {
-                        if (!client.validatedAt) return false;
-                        const date = new Date(client.validatedAt);
-                        return date.toDateString() === new Date().toDateString();
-                      }).length} clients
-                    </p>
+                    <div className="period-header">
+                      <FiCalendar size={20} />
+                      <h4>Aujourd'hui</h4>
+                    </div>
+                    <div className="period-stats">
+                      <div>
+                        <p className="period-label">Validés:</p>
+                        <p className="period-count">
+                          {validatedClients.filter(client => {
+                            const date = new Date(client.validatedAt);
+                            return date.toDateString() === new Date().toDateString();
+                          }).length}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="period-label">En attente:</p>
+                        <p className="period-count">
+                          {pendingClients.filter(client => {
+                            const date = new Date(client.createdAt);
+                            return date.toDateString() === new Date().toDateString();
+                          }).length}
+                        </p>
+                      </div>
+                    </div>
                     <p className="period-amount">
-                      {clientList.filter(client => {
-                        if (!client.validatedAt) return false;
+                      {validatedClients.filter(client => {
                         const date = new Date(client.validatedAt);
                         return date.toDateString() === new Date().toDateString();
                       }).length * COMMISSION_PER_CLIENT} FCFA
@@ -506,18 +613,34 @@ const AgentDashboard = () => {
                   </div>
                   
                   <div className="period-card">
-                    <h4>Ce mois</h4>
-                    <p className="period-count">
-                      {clientList.filter(client => {
-                        if (!client.validatedAt) return false;
-                        const date = new Date(client.validatedAt);
-                        const now = new Date();
-                        return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-                      }).length} clients
-                    </p>
+                    <div className="period-header">
+                      <FiCalendar size={20} />
+                      <h4>Ce mois</h4>
+                    </div>
+                    <div className="period-stats">
+                      <div>
+                        <p className="period-label">Validés:</p>
+                        <p className="period-count">
+                          {validatedClients.filter(client => {
+                            const date = new Date(client.validatedAt);
+                            const now = new Date();
+                            return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+                          }).length}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="period-label">En attente:</p>
+                        <p className="period-count">
+                          {pendingClients.filter(client => {
+                            const date = new Date(client.createdAt);
+                            const now = new Date();
+                            return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+                          }).length}
+                        </p>
+                      </div>
+                    </div>
                     <p className="period-amount">
-                      {clientList.filter(client => {
-                        if (!client.validatedAt) return false;
+                      {validatedClients.filter(client => {
                         const date = new Date(client.validatedAt);
                         const now = new Date();
                         return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
