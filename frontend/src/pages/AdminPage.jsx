@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './AdminDashboard.css';
 import logo from '../assets/logo.png';
 
-const API_BASE = 'http://localhost:5000';
+const API_BASE = `${process.env.REACT_APP_API_URL}`;
 const COMMISSION_PER_CLIENT = 160; // 160 FCFA par client
 
 const AdminDashboard = () => {
