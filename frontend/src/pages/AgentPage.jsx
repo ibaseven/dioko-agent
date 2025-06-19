@@ -5,7 +5,7 @@ import logo from '../assets/logo.png';
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
 
-const API_BASE = `${process.env.REACT_APP_API_URL}`;
+const API_BASE = 'http://localhost:5000';
 const COMMISSION_PER_CLIENT = 160; // 160 FCFA par client
 
 const AgentDashboard = () => {

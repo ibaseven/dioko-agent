@@ -8,15 +8,16 @@ const adminSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  email: {
+  phone: {
     type: String,
     required: true,
-    unique: true,
-    lowercase: true
+    // unique: true,  // ← Commenté pour permettre les doublons
+    trim: true
   },
   password: {
     type: String,
-    required: true
+    required: true,
+    select: false  // Par défaut, ne pas inclure le mot de passe dans les requêtes
   },
   role: {
     type: String,

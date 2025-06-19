@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import './AdminDashboard.css';
 import logo from '../assets/logo.png';
 
-const API_BASE = `${process.env.REACT_APP_API_URL}`;
+const API_BASE = 'http://localhost:5000';
 const COMMISSION_PER_CLIENT = 160; // 160 FCFA par client
 
 const AdminDashboard = () => {
@@ -16,6 +16,7 @@ const AdminDashboard = () => {
   const [agentPhone, setAgentPhone] = useState('');
   const [agentPassword, setAgentPassword] = useState('');
   const [agentMessage, setAgentMessage] = useState('');
+  const [showPassword, setShowPassword] = useState(false);  
 
   // États validation client
   const [clientFirstName, setClientFirstName] = useState('');
@@ -134,82 +135,98 @@ const AdminDashboard = () => {
   };
 
   // Validation client
-  const handleCreateClient = async (e) => {
-    e.preventDefault();
-    if (formStep === 1) {
-      setValidationMessage('Envoi des infos client...');
-      try {
-        const response = await fetch(`${API_BASE}/api/client/validate`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-          },
-          body: JSON.stringify({
-            firstName: clientFirstName,
-            lastName: clientLastName,
-            phone: clientPhone,
-          }),
-        });
-
-        const data = await response.json();
-        if (response.ok) {
-          setValidationMessage('Code OTP envoyé. Veuillez entrer le code.');
-          localStorage.setItem('pendingClient', JSON.stringify({
-            firstName: clientFirstName,
-            lastName: clientLastName,
-            phone: clientPhone,
-            _id: data.client._id
-          }));
-          setFormStep(2);
-        } else {
-          setValidationMessage(data.message || 'Erreur');
-        }
-      } catch (err) {
-        setValidationMessage('Erreur serveur');
-      }
-    } else {
-      handleValidateOtp(e);
-    }
-  };
-
-  // Validation OTP
-  const handleValidateOtp = async (e) => {
-    e.preventDefault();
-    setValidationMessage('Validation en cours...');
+ // Validation client - VERSION CORRIGÉE
+const handleCreateClient = async (e) => {
+  e.preventDefault();
+  if (formStep === 1) {
+    setValidationMessage('Envoi des infos client...');
     try {
-      const pendingClient = JSON.parse(localStorage.getItem('pendingClient'));
-      
-      const response = await fetch(`${API_BASE}/api/client/verify-otp`, {
+      const response = await fetch(`${API_BASE}/api/client/validate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
         },
         body: JSON.stringify({
-          clientId: pendingClient._id,
-          phone: pendingClient.phone,
-          otp: otp,
+          firstName: clientFirstName,
+          lastName: clientLastName,
+          phone: clientPhone,
         }),
       });
 
       const data = await response.json();
-      if (response.ok) {
-        setValidationMessage('✅ Client validé avec succès !');
-        localStorage.removeItem('pendingClient');
-        setFormStep(1);
-        setClientFirstName('');
-        setClientLastName('');
-        setClientPhone('');
-        setOtp('');
-        fetchClients();
-      } else {
-        setValidationMessage(data.message || 'Code OTP incorrect');
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Erreur lors de la validation');
       }
+
+      setValidationMessage('Code OTP envoyé. Veuillez entrer le code.');
+      
+      // Stockage sécurisé des données du client en attente
+      localStorage.setItem('pendingClient', JSON.stringify({
+        firstName: clientFirstName,
+        lastName: clientLastName,
+        phone: clientPhone,
+        _id: data.clientId || data._id // Gère les deux formats de réponse
+      }));
+      
+      setFormStep(2);
     } catch (err) {
-      setValidationMessage('Erreur serveur');
+      console.error('Erreur validation client:', err);
+      setValidationMessage(err.message || 'Erreur serveur');
     }
-  };
+  } else {
+    handleValidateOtp(e);
+  }
+};
+
+  // Validation OTP
+const handleValidateOtp = async (e) => {
+  e.preventDefault();
+  setValidationMessage('Validation en cours...');
+  
+  try {
+    const pendingClientStr = localStorage.getItem('pendingClient');
+    if (!pendingClientStr) {
+      throw new Error('Session client introuvable');
+    }
+
+    const pendingClient = JSON.parse(pendingClientStr);
+    
+    const response = await fetch(`${API_BASE}/api/client/verify-otp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      },
+      body: JSON.stringify({
+        clientId: pendingClient._id,
+        phone: pendingClient.phone,
+        otp: otp,
+      }),
+    });
+
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.message || 'Code OTP incorrect');
+    }
+
+    // Succès
+    setValidationMessage('✅ Client validé avec succès !');
+    localStorage.removeItem('pendingClient');
+    setFormStep(1);
+    setClientFirstName('');
+    setClientLastName('');
+    setClientPhone('');
+    setOtp('');
+    fetchClients();
+    
+  } catch (err) {
+    console.error('Erreur validation OTP:', err);
+    setValidationMessage(err.message || 'Erreur serveur');
+  }
+};
 
   // Récupération des agents
   const fetchAgents = async () => {
@@ -328,6 +345,37 @@ const AdminDashboard = () => {
     }
   };
 
+    // Fonction pour supprimer un agent
+  const deleteAgent = async (agentId) => {
+    if (!window.confirm("Êtes-vous sûr de vouloir supprimer cet agent ?")) {
+      return;
+    }
+
+    setLoadingAgentId(agentId);
+    try {
+      const response = await fetch(`${API_BASE}/api/admin/agents/${agentId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        },
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        setAgentMessage('✅ Agent supprimé avec succès');
+        setTimeout(() => setAgentMessage(''), 3000);
+        fetchAgents(); // Recharger la liste des agents
+      } else {
+        setAgentMessage(data.message || "Erreur lors de la suppression");
+        setTimeout(() => setAgentMessage(''), 3000);
+      }
+    } catch (err) {
+      setAgentMessage("Erreur de connexion au serveur");
+      setTimeout(() => setAgentMessage(''), 3000);
+    } finally {
+      setLoadingAgentId(null);
+    }
+  };
   // Filtrage clients
   const filterClients = () => {
     const now = new Date();
@@ -527,128 +575,154 @@ const AdminDashboard = () => {
           </div>
         )}
 
-        {/* Écran création agent */}
-        {currentScreen === 'create-agent' && (
-          <div className="screen-container">
-            <div className="form-card">
-              <h2 className="screen-title">Nouvel Agent</h2>
+      {/* Écran création agent */}
+{currentScreen === 'create-agent' && (
+  <div className="screen-container">
+    <div className="form-card">
+      <h2 className="screen-title">Nouvel Agent</h2>
+      
+      <form onSubmit={handleCreateAgent} className="form-container">
+        <div className="input-group">
+          <label>Nom complet</label>
+          <input 
+            type="text" 
+            value={agentName}
+            onChange={(e) => setAgentName(e.target.value)}
+            placeholder="Ex: Jean Dupont"
+            required
+          />
+        </div>
+        
+        <div className="input-group">
+          <label>Téléphone</label>
+          <input 
+            type="tel" 
+            value={agentPhone}
+            onChange={(e) => setAgentPhone(e.target.value)}
+            placeholder="Ex: 077123456"
+            required
+          />
+        </div>
+        
+        <div className="input-group">
+          <label>Mot de passe</label>
+          <div className="password-input-container">
+            <input 
+              type={showPassword ? "text" : "password"} 
+              value={agentPassword}
+              onChange={(e) => setAgentPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+              className="password-input"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="toggle-password"
+            >
+              {showPassword ? (
+                <span className="eye-icon">👁️</span> // Icône "œil barré" ou texte "Cacher"
+              ) : (
+                <span className="eye-icon">👁️</span> // Icône "œil" ou texte "Afficher"
+              )}
+            </button>
+          </div>
+          {agentPassword && (
+            <div className="password-hint">
+              Mot de passe visible : {showPassword ? agentPassword : '••••••••'}
+            </div>
+          )}
+        </div>
+        
+        <button type="submit" className="btn-primary">
+          Créer l'agent
+        </button>
+      </form>
+      
+      {agentMessage && (
+        <div className={`message ${agentMessage.includes('✅') ? 'success' : 'error'}`}>
+          {agentMessage}
+        </div>
+      )}
+    </div>
+  </div>
+)}
+        
+       {/* Écran agents */}
+      {currentScreen === 'agents' && (
+        <div className="screen-container">
+          <div className="list-card">
+            <div className="list-header">
+              <h2>Gestion des Agents</h2>
+              <input
+                type="text"
+                placeholder="Rechercher..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="search-input"
+              />
+            </div>
+            
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Nom</th>
+                    <th>Téléphone</th>
+                    <th>Statut</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredAgents.map((agent) => (
+                    <tr key={agent._id}>
+                      <td>{agent.name}</td>
+                      <td>{agent.phone}</td>
+                      <td>
+                        <span className={`status-badge ${agent.isActive ? 'active' : 'blocked'}`}>
+                          {agent.isActive ? 'Actif' : 'Bloqué'}
+                        </span>
+                      </td>
+                      <td className="actions">
+                        <button 
+                          onClick={() => viewAgentSalary(agent._id, agent.name)}
+                          className="btn-action"
+                        >
+                          Voir Salaire
+                        </button>
+                        <button 
+                          onClick={() => toggleAgentStatus(agent._id)}
+                          className={`btn-action ${agent.isActive ? 'block' : 'activate'}`}
+                          disabled={loadingAgentId === agent._id}
+                        >
+                          {loadingAgentId === agent._id ? (
+                            'Chargement...'
+                          ) : (
+                            agent.isActive ? 'Bloquer' : 'Activer'
+                          )}
+                        </button>
+                        <button 
+                          onClick={() => deleteAgent(agent._id)}
+                          className="btn-action delete"
+                          disabled={loadingAgentId === agent._id}
+                        >
+                          {loadingAgentId === agent._id ? 'Chargement...' : 'Supprimer'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
               
-              <form onSubmit={handleCreateAgent} className="form-container">
-                <div className="input-group">
-                  <label>Nom complet</label>
-                  <input 
-                    type="text" 
-                    value={agentName}
-                    onChange={(e) => setAgentName(e.target.value)}
-                    placeholder="Ex: Jean Dupont"
-                    required
-                  />
-                </div>
-                
-                <div className="input-group">
-                  <label>Téléphone</label>
-                  <input 
-                    type="tel" 
-                    value={agentPhone}
-                    onChange={(e) => setAgentPhone(e.target.value)}
-                    placeholder="Ex: 077123456"
-                    required
-                  />
-                </div>
-                
-                <div className="input-group">
-                  <label>Mot de passe</label>
-                  <input 
-                    type="password" 
-                    value={agentPassword}
-                    onChange={(e) => setAgentPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                  />
-                </div>
-                
-                <button type="submit" className="btn-primary">
-                  Créer l'agent
-                </button>
-              </form>
-              
-              {agentMessage && (
-                <div className={`message ${agentMessage.includes('✅') ? 'success' : 'error'}`}>
-                  {agentMessage}
+              {filteredAgents.length === 0 && (
+                <div className="empty-state">
+                  <p>Aucun agent trouvé</p>
                 </div>
               )}
             </div>
           </div>
-        )}
-        
-        {/* Écran agents */}
-        {currentScreen === 'agents' && (
-          <div className="screen-container">
-            <div className="list-card">
-              <div className="list-header">
-                <h2>Gestion des Agents</h2>
-                <input
-                  type="text"
-                  placeholder="Rechercher..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="search-input"
-                />
-              </div>
-              
-              <div className="table-container">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Nom</th>
-                      <th>Téléphone</th>
-                      <th>Statut</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAgents.map((agent) => (
-                      <tr key={agent._id}>
-                        <td>{agent.name}</td>
-                        <td>{agent.phone}</td>
-                        <td>
-                          <span className={`status-badge ${agent.isActive ? 'active' : 'blocked'}`}>
-                            {agent.isActive ? 'Actif' : 'Bloqué'}
-                          </span>
-                        </td>
-                        <td className="actions">
-                          <button 
-                            onClick={() => viewAgentSalary(agent._id, agent.name)}
-                            className="btn-action"
-                          >
-                            Voir Salaire
-                          </button>
-                          <button 
-                            onClick={() => toggleAgentStatus(agent._id)}
-                            className={`btn-action ${agent.isActive ? 'block' : 'activate'}`}
-                            disabled={loadingAgentId === agent._id}
-                          >
-                            {loadingAgentId === agent._id ? (
-                              'Chargement...'
-                            ) : (
-                              agent.isActive ? 'Bloquer' : 'Activer'
-                            )}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                
-                {filteredAgents.length === 0 && (
-                  <div className="empty-state">
-                    <p>Aucun agent trouvé</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        </div>
+      )}
 
         {/* Écran clients */}
         {currentScreen === 'clients' && (

@@ -18,22 +18,29 @@ exports.login = async (req, res) => {
   try {
     let user = null;
 
-    // Si l'email est fourni, on cherche un admin
+    // Si l'email est fourni, on cherche un admin (pour compatibilité)
     if (email) {
-      user = await Admin.findOne({ email });
+      user = await Admin.findOne({ email }).select('+password');
       if (!user) {
         return res.status(404).json({ message: "Admin introuvable" });
       }
     }
 
-    // Si le téléphone est fourni, on cherche un agent
+    // Si le téléphone est fourni, on cherche d'abord un admin, puis un agent
     if (phone) {
-      user = await Agent.findOne({ phone });
+      // Chercher d'abord dans les admins
+      user = await Admin.findOne({ phone }).select('+password');
+      
+      // Si pas trouvé dans les admins, chercher dans les agents
       if (!user) {
-        return res.status(404).json({ message: "Agent introuvable" });
-      }
-      if (!user.isActive) {
-        return res.status(403).json({ message: "Compte agent bloqué" });
+        user = await Agent.findOne({ phone }).select('+password');
+        if (!user) {
+          return res.status(404).json({ message: "Utilisateur introuvable" });
+        }
+        // Vérifier si l'agent est actif
+        if (!user.isActive) {
+          return res.status(403).json({ message: "Compte agent bloqué" });
+        }
       }
     }
 
@@ -66,21 +73,110 @@ exports.logout = (req, res) => {
 
 // Création d'un admin
 exports.createAdmin = async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, phone, password } = req.body;
 
   try {
-    const existingAdmin = await Admin.findOne({ email });
-    if (existingAdmin) {
-      return res.status(400).json({ message: 'Cet admin existe déjà' });
+    // Vérification des champs requis
+    if (!name || !phone || !password) {
+      return res.status(400).json({ message: 'Nom, téléphone et mot de passe sont requis' });
     }
 
-    const newAdmin = new Admin({ name, email, password });
+    // Validation du format du téléphone (optionnel, adaptez selon vos besoins)
+    const phoneRegex = /^[+]?[\d\s\-\(\)]{8,15}$/;
+    if (!phoneRegex.test(phone)) {
+      return res.status(400).json({ message: 'Format de téléphone invalide' });
+    }
+
+    // Vérification de l'unicité du téléphone
+    const existingAdmin = await Admin.findOne({ phone });
+    if (existingAdmin) {
+      return res.status(400).json({ message: 'Un admin avec ce numéro existe déjà' });
+    }
+
+    // Validation du mot de passe
+    if (password.length < 8) {
+      return res.status(400).json({ message: 'Le mot de passe doit contenir au moins 8 caractères' });
+    }
+
+    const newAdmin = new Admin({ name, phone, password });
     await newAdmin.save(); // le mot de passe sera hashé automatiquement
 
-    res.status(201).json({ message: 'Admin créé avec succès ✅', admin: newAdmin });
+    // Retourner les informations sans le mot de passe
+    const adminResponse = {
+      id: newAdmin._id,
+      name: newAdmin.name,
+      phone: newAdmin.phone,
+      role: newAdmin.role,
+      createdAt: newAdmin.createdAt
+    };
+
+    res.status(201).json({ message: 'Admin créé avec succès ✅', admin: adminResponse });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Erreur lors de la création de l'admin" });
+    console.error('Erreur création admin:', err);
+    res.status(500).json({ 
+      message: "Erreur lors de la création de l'admin",
+      error: err.message 
+    });
+  }
+};
+
+// Création d'un agent (nouveau)
+exports.createAgent = async (req, res) => {
+  const { name, phone, password } = req.body;
+
+  try {
+    // Vérification des champs requis
+    if (!name || !phone || !password) {
+      return res.status(400).json({ message: 'Nom, téléphone et mot de passe sont requis' });
+    }
+
+    // Validation du format du téléphone (optionnel, adaptez selon vos besoins)
+    const phoneRegex = /^[+]?[\d\s\-\(\)]{8,15}$/;
+    if (!phoneRegex.test(phone)) {
+      return res.status(400).json({ message: 'Format de téléphone invalide' });
+    }
+
+    // Vérification de l'unicité du téléphone
+    const existingAgent = await Agent.findOne({ phone });
+    if (existingAgent) {
+      return res.status(400).json({ message: 'Un agent avec ce numéro existe déjà' });
+    }
+
+    // Validation du mot de passe
+    if (password.length < 8) {
+      return res.status(400).json({ message: 'Le mot de passe doit contenir au moins 8 caractères' });
+    }
+
+    // Création du nouvel agent
+    const newAgent = new Agent({ 
+      name, 
+      phone, 
+      password,
+      isActive: true // Par défaut, l'agent est actif
+    });
+    
+    await newAgent.save(); // le mot de passe sera hashé automatiquement
+
+    // Retourner les informations sans le mot de passe
+    const agentResponse = {
+      id: newAgent._id,
+      name: newAgent.name,
+      phone: newAgent.phone,
+      role: newAgent.role,
+      isActive: newAgent.isActive,
+      createdAt: newAgent.createdAt
+    };
+
+    res.status(201).json({ 
+      message: 'Agent créé avec succès ✅', 
+      agent: agentResponse 
+    });
+  } catch (err) {
+    console.error('Erreur création agent:', err);
+    res.status(500).json({ 
+      message: "Erreur lors de la création de l'agent",
+      error: err.message 
+    });
   }
 };
 
