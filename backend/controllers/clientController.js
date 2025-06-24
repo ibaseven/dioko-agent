@@ -4,7 +4,6 @@ const Client = require('../models/client');
 const Agent = require('../models/agent');
 require('dotenv').config();
 
-
 // Configuration UltraMsg
 const INSTANCE_ID = process.env.ULTRAMSG_INSTANCE_ID;
 const TOKEN = process.env.ULTRAMSG_TOKEN;
@@ -21,23 +20,28 @@ function generateOTP(length = 6) {
 
 // Formatage numéro Sénégal
 function formatPhoneNumber(phone) {
-  let cleaned = (phone || '').toString().replace(/\D/g, '');
+  try {
+    let cleaned = (phone || '').toString().replace(/\D/g, '');
 
-  if (cleaned.startsWith('00221')) {
-    cleaned = cleaned.substring(2);
-  } else if (cleaned.startsWith('+221')) {
-    cleaned = cleaned.substring(1);
-  } else if (cleaned.startsWith('0')) {
-    cleaned = '221' + cleaned.substring(1);
-  } else if (!cleaned.startsWith('221')) {
-    cleaned = '221' + cleaned;
+    if (cleaned.startsWith('00221')) {
+      cleaned = cleaned.substring(2);
+    } else if (cleaned.startsWith('+221')) {
+      cleaned = cleaned.substring(1);
+    } else if (cleaned.startsWith('0')) {
+      cleaned = '221' + cleaned.substring(1);
+    } else if (!cleaned.startsWith('221')) {
+      cleaned = '221' + cleaned;
+    }
+
+    if (!/^221[0-9]{9}$/.test(cleaned)) {
+      throw new Error(`Numéro invalide après formatage: ${cleaned}`);
+    }
+
+    return cleaned;
+  } catch (error) {
+    console.error('Erreur de formatage du numéro:', error);
+    throw error;
   }
-
-  if (!/^221[0-9]{9}$/.test(cleaned)) {
-    throw new Error(`Numéro invalide après formatage: ${cleaned}`);
-  }
-
-  return cleaned;
 }
 
 // Envoi WhatsApp
@@ -50,7 +54,7 @@ async function sendWhatsAppMessage(phoneNumber, message) {
     const formattedPhone = formatPhoneNumber(phoneNumber);
     const apiUrl = `https://api.ultramsg.com/${INSTANCE_ID}/messages/chat`;
 
-    console.log("Envoi WhatsApp vers :", formattedPhone);
+    console.log("Envoi WhatsApp vers:", formattedPhone);
     console.log("Message:", message);
     console.log("API URL:", apiUrl);
 
@@ -85,32 +89,58 @@ exports.initiateValidation = async (req, res) => {
   const agentId = req.user.id;
 
   try {
-    const existingClient = await Client.findOne({ phone });
+    const formattedPhone = formatPhoneNumber(phone);
+    console.log(`Recherche client avec numéro: ${formattedPhone}`);
+
+    const existingClient = await Client.findOne({ phone: formattedPhone });
+    
     if (existingClient) {
-      return res.status(400).json({ 
-        message: 'Ce numéro est déjà enregistré',
+      console.log('Client existant trouvé:', {
+        id: existingClient._id,
+        isValidated: existingClient.isValidated
+      });
+
+      if (existingClient.isValidated) {
+        return res.status(400).json({ 
+          message: 'Ce numéro est déjà enregistré et validé',
+          clientId: existingClient._id
+        });
+      }
+
+      const otp = generateOTP();
+      const otpExpires = new Date(Date.now() + 15 * 60 * 1000);
+      
+      existingClient.otp = otp;
+      existingClient.otpExpires = otpExpires;
+      await existingClient.save();
+
+      const message = `Bonjour ${existingClient.firstName},\nVotre nouveau code de validation est: ${otp}\nValable 15 minutes`;
+      await sendWhatsAppMessage(formattedPhone, message);
+
+      return res.status(200).json({ 
+        message: 'Nouveau OTP envoyé pour ce numéro',
         clientId: existingClient._id,
-        status: existingClient.isValidated ? 'validé' : 'en attente'
+        expiresAt: otpExpires,
+        ...(process.env.NODE_ENV !== 'production' && { debugOtp: otp })
       });
     }
 
     const otp = generateOTP();
-    const otpExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    const otpExpires = new Date(Date.now() + 15 * 60 * 1000);
+    const message = `Bonjour ${firstName},\nVotre code de validation est: ${otp}\nValable 15 minutes`;
+
+    await sendWhatsAppMessage(formattedPhone, message);
 
     const newClient = new Client({
       firstName,
       lastName,
-      phone,
+      phone: formattedPhone,
       otp,
       otpExpires,
       agent: agentId
     });
 
     await newClient.save();
-
-    const message = `Bonjour ${firstName},\nVotre code de validation est: ${otp}\nValable 15 minutes`;
-
-    await sendWhatsAppMessage(phone, message);
 
     res.status(200).json({ 
       message: 'OTP envoyé avec succès',
@@ -120,7 +150,11 @@ exports.initiateValidation = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Erreur validation client:', error);
+    console.error('Erreur validation client:', {
+      error: error.message,
+      stack: error.stack
+    });
+    
     res.status(500).json({ 
       message: "Erreur lors de la validation",
       error: error.message
@@ -185,7 +219,10 @@ exports.validateWithOTP = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Erreur validation OTP:', error);
+    console.error('Erreur validation OTP:', {
+      error: error.message,
+      stack: error.stack
+    });
     res.status(500).json({ 
       message: "Erreur lors de la validation OTP",
       error: error.message 
@@ -193,18 +230,24 @@ exports.validateWithOTP = async (req, res) => {
   }
 };
 
-// Obtenir les clients d'un agent
+// Obtenir les clients d'un agent (version simplifiée pour le frontend)
 exports.getAgentClients = async (req, res) => {
   try {
     const agentId = req.user.role === 'admin' && req.params.agentId 
       ? req.params.agentId 
       : req.user.id;
 
-    const clients = await Client.find({ agent: agentId }).sort({ createdAt: -1 });
+    // Retourne directement un tableau pour le frontend
+    const clients = await Client.find({ agent: agentId })
+      .sort({ createdAt: -1 });
 
-    res.status(200).json(clients);
+    res.status(200).json(clients); // Retourne directement le tableau
+
   } catch (error) {
-    console.error('Erreur récupération clients:', error);
+    console.error('Erreur récupération clients:', {
+      error: error.message,
+      stack: error.stack
+    });
     res.status(500).json({ 
       message: "Erreur lors de la récupération des clients",
       error: error.message 
@@ -212,21 +255,25 @@ exports.getAgentClients = async (req, res) => {
   }
 };
 
-
-// ✅ Obtenir tous les clients (accès admin uniquement)
+// Obtenir tous les clients (version simplifiée pour le frontend)
 exports.getAllClients = async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ message: "Accès refusé: réservé à l'admin" });
     }
 
+    // Retourne directement un tableau pour le frontend
     const clients = await Client.find()
-      .populate('agent', 'name phone') // Optionnel : afficher les infos de l’agent associé
+      .populate('agent', 'name phone')
       .sort({ createdAt: -1 });
 
-    res.status(200).json(clients);
+    res.status(200).json(clients); // Retourne directement le tableau
+
   } catch (error) {
-    console.error('Erreur récupération tous les clients:', error);
+    console.error('Erreur récupération tous les clients:', {
+      error: error.message,
+      stack: error.stack
+    });
     res.status(500).json({
       message: "Erreur lors de la récupération des clients",
       error: error.message
@@ -234,3 +281,34 @@ exports.getAllClients = async (req, res) => {
   }
 };
 
+// Nouvelle endpoint pour la pagination si nécessaire
+exports.getAgentClientsPaginated = async (req, res) => {
+  try {
+    const agentId = req.user.role === 'admin' && req.params.agentId 
+      ? req.params.agentId 
+      : req.user.id;
+
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const clients = await Client.find({ agent: agentId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Client.countDocuments({ agent: agentId });
+
+    res.status(200).json({
+      clients,
+      total,
+      page: parseInt(page),
+      totalPages: Math.ceil(total / limit)
+    });
+  } catch (error) {
+    console.error('Erreur récupération clients paginés:', error);
+    res.status(500).json({ 
+      message: "Erreur lors de la récupération des clients",
+      error: error.message 
+    });
+  }
+};
