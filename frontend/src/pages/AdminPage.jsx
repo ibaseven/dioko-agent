@@ -39,6 +39,7 @@ const AdminDashboard = () => {
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [agentsWithSalary, setAgentsWithSalary] = useState([]);
 
   // Fonctions utilitaires
   const toggleMenu = () => setIsMenuOpen(!isMenuOpen);
@@ -229,23 +230,82 @@ const handleValidateOtp = async (e) => {
 };
 
   // Récupération des agents
-  const fetchAgents = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/api/admin/agents`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        }
-      });
-      const data = await response.json();
-      if (response.ok) {
-        setAgentsList(data);
-      } else {
-        console.error(data.message || "Erreur chargement agents");
+// 2. REMPLACER LA FONCTION fetchAgents PAR CETTE VERSION AMÉLIORÉE
+const fetchAgents = async () => {
+  try {
+    const response = await fetch(`${API_BASE}/api/admin/agents`, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
       }
-    } catch (err) {
-      console.error("Erreur serveur agents");
+    });
+    const data = await response.json();
+    if (response.ok) {
+      setAgentsList(data);
+      // Récupérer les données de salaire pour chaque agent
+      fetchAgentsWithSalaryData(data);
+    } else {
+      console.error(data.message || "Erreur chargement agents");
     }
-  };
+  } catch (err) {
+    console.error("Erreur serveur agents");
+  }
+};
+
+// 3. AJOUTER CETTE NOUVELLE FONCTION POUR RÉCUPÉRER LES DONNÉES DE SALAIRE
+const fetchAgentsWithSalaryData = async (agents) => {
+  try {
+    const agentsWithSalaryData = await Promise.all(
+      agents.map(async (agent) => {
+        try {
+          const response = await fetch(`${API_BASE}/api/client/agent/${agent._id}/clients`, {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('token')}`
+            }
+          });
+          
+          if (response.ok) {
+            const clients = await response.json();
+            const salaryData = calculateAgentSalaryData(clients, selectedMonth, selectedYear);
+            return {
+              ...agent,
+              clients: clients, // IMPORTANT: Stocker les clients
+              salaryData
+            };
+          } else {
+            console.error(`Erreur API pour agent ${agent.name}:`, response.status);
+            return {
+              ...agent,
+              clients: [],
+              salaryData: {
+                currentSalary: 0,
+                potentialSalary: 0,
+                validatedClients: 0,
+                pendingClients: 0
+              }
+            };
+          }
+        } catch (err) {
+          console.error(`Erreur pour l'agent ${agent.name}:`, err);
+          return {
+            ...agent,
+            clients: [],
+            salaryData: {
+              currentSalary: 0,
+              potentialSalary: 0,
+              validatedClients: 0,
+              pendingClients: 0
+            }
+          };
+        }
+      })
+    );
+    
+    console.log('Données agents avec salaires:', agentsWithSalaryData); // DEBUG
+    setAgentsWithSalary(agentsWithSalaryData);
+  } catch (err) {
+    console.error("Erreur lors du chargement des données salariales:", err);
+  }
+};
 
   // Récupération des clients
   const fetchClients = async () => {
@@ -792,53 +852,119 @@ const handleValidateOtp = async (e) => {
         )}
 
         {/* Écran salaires */}
-        {currentScreen === 'salaries' && (
-          <div className="screen-container">
-            <div className="list-card">
-              <h2>Salaires Mensuels</h2>
-              
-              <div className="search-container">
-                <input
-                  type="text"
-                  placeholder="Rechercher un agent..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="search-input"
-                />
+       {currentScreen === 'salaries' && (
+  <div className="screen-container">
+    <div className="list-card">
+      <div className="list-header">
+        <h2>Salaires Mensuels - {getMonthName(selectedMonth)} {selectedYear}</h2>
+        <div className="controls-row">
+          <div className="month-selector">
+            <button 
+              onClick={() => setShowMonthPicker(!showMonthPicker)}
+              className="month-button"
+            >
+              {getMonthName(selectedMonth)} {selectedYear}
+              <span className="arrow">▼</span>
+            </button>
+            
+            {showMonthPicker && (
+              <div className="month-picker">
+                {getAvailableMonths().map((m, index) => (
+                  <button
+                    key={index}
+                    className={`month-option ${selectedMonth === m.month && selectedYear === m.year ? 'selected' : ''}`}
+                    onClick={() => {
+                      setSelectedMonth(m.month);
+                      setSelectedYear(m.year);
+                      setShowMonthPicker(false);
+                      // Recharger les données avec le nouveau mois
+                      fetchAgentsWithSalaryData(agentsList);
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                ))}
               </div>
-              
-              <div className="table-container">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Agent</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAgents.map((agent) => (
-                      <tr key={agent._id}>
-                        <td>
-                          <strong>{agent.name}</strong>
-                          <br />
-                          <small>{agent.phone}</small>
-                        </td>
-                        <td>
-                          <button 
-                            onClick={() => viewAgentSalary(agent._id, agent.name)}
-                            className="btn-action"
-                          >
-                            Voir Détails
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            )}
           </div>
-        )}
+          <input
+            type="text"
+            placeholder="Rechercher un agent..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="search-input"
+          />
+        </div>
+      </div>
+      
+      <div className="agents-salary-grid">
+        {agentsWithSalary
+          .filter(agent => 
+            agent.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            agent.phone.includes(searchTerm)
+          )
+          .map((agent) => {
+            const salaryData = calculateAgentSalaryData(agent.clients || [], selectedMonth, selectedYear);
+            const isCurrentMonth = selectedMonth === new Date().getMonth() && selectedYear === new Date().getFullYear();
+            
+            return (
+              <div key={agent._id} className="agent-salary-card">
+                <div className="agent-info">
+                  <h3>{agent.name}</h3>
+                  <p className="phone">{agent.phone}</p>
+                  <span className={`status-badge ${agent.isActive ? 'active' : 'blocked'}`}>
+                    {agent.isActive ? 'Actif' : 'Bloqué'}
+                  </span>
+                </div>
+                
+                <div className="salary-info">
+                  <div className="salary-row">
+                    <span className="label">Salaire {isCurrentMonth ? 'en cours' : 'du mois'}</span>
+                    <span className="amount current">{salaryData.currentSalary} FCFA</span>
+                  </div>
+                  
+                  {isCurrentMonth && (
+                    <div className="salary-row">
+                      <span className="label">Salaire potentiel</span>
+                      <span className="amount potential">{salaryData.potentialSalary} FCFA</span>
+                    </div>
+                  )}
+                  
+                  <div className="clients-summary">
+                    <div className="client-count">
+                      <span className="count validated">{salaryData.validatedClients}</span>
+                      <span className="label">Validés</span>
+                    </div>
+                    {isCurrentMonth && (
+                      <div className="client-count">
+                        <span className="count pending">{salaryData.pendingClients}</span>
+                        <span className="label">En attente</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="actions">
+                  <button 
+                    onClick={() => viewAgentSalary(agent._id, agent.name)}
+                    className="btn-action view-details"
+                  >
+                    Voir Détails
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+      </div>
+      
+      {agentsWithSalary.length === 0 && (
+        <div className="empty-state">
+          <p>Chargement des données salariales...</p>
+        </div>
+      )}
+    </div>
+  </div>
+)}
 
         {/* Écran salaire d'un agent */}
         {currentScreen === 'agent-salary' && (
